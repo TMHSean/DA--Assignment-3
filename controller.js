@@ -111,9 +111,9 @@ const CreateTask = async (req, res) => {
     // Expected keys validation || checking for additional parameters in the payload
     validateKeys(req.body, ["username", "password", "app_acronym", "task_name", "task_description"]);
 
-    const usernameLower = username.toLowerCase();
-    const acronymLower = app_acronym.toLowerCase();
-    const tasknameLower = task_name.toLowerCase();
+    const usernameLower = username.toString().toLowerCase();
+    const acronymLower = app_acronym.toString().toLowerCase();
+    const tasknameLower = task_name.toString().toLowerCase();
 
     // User Authentication
     const connection = await db.getConnection();
@@ -267,7 +267,7 @@ const PromoteTask2Done = async (req, res) => {
     // Expected keys validation
     validateKeys(req.body, ["username", "password", "task_id"]);
 
-    const usernameLower = username.toLowerCase();
+    const usernameLower = username.toString().toLowerCase();
     const connection = await db.getConnection();
     try {
       // Begin Transaction
