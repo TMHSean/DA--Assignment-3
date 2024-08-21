@@ -11,9 +11,7 @@ const validateKeys = (obj, expectedKeys) => {
   if (extraKeys.length > 0) {
     throw new Error("E_SP2"); // E_SP2: Duplicate parameters or key issues
   }
-
 };
-
 
 // Helper function to fetch users in a specific group
 const fetchUsersInGroup = async (groupName) => {
@@ -95,6 +93,7 @@ const sendTaskNotification = async (taskId, taskName, groupName) => {
 
 // Controller Function to create a new task
 const CreateTask = async (req, res) => {
+  let connection;
   try {
 
     const { username, password, app_acronym, task_name, task_description } = req.body;
@@ -117,93 +116,95 @@ const CreateTask = async (req, res) => {
 
     // User Authentication
     const connection = await db.getConnection();
-    try {
-      const [userResult] = await connection.query("SELECT * FROM user WHERE username = ?", [usernameLower]);
-      if (userResult.length === 0) {
-        throw new Error("E_AU1");
-      }
-
-      const user = userResult[0];
-
-      // Check if the user password is valid
-      const isPasswordValid = await bcrypt.compare(password, user.password);
-      if (!isPasswordValid) {
-        throw new Error("E_AU2");
-      }
-
-      // Check if the user is disabled
-      if (user.disabled === 1) {
-        throw new Error("E_AU3");
-      }
-
-      // Retrieve the application object with acronym
-      const [appResult] = await connection.query("SELECT * FROM application WHERE app_acronym = ?", [acronymLower]);
-      if (appResult.length === 0) {
-        throw new Error("E_TE2");
-      }
-
-      const app = appResult[0];
-      const groupPermitCreate = app.app_permit_create;
-
-      // Check user access rights
-      const [groupResult] = await connection.query(
-        "SELECT 1 FROM usergroup WHERE username = ? AND group_name = ?",
-        [usernameLower, groupPermitCreate]
-      );
-      if (groupResult.length === 0) {
-        throw new Error("E_AR1");
-      }
-
-      // Begin Transaction
-      await connection.beginTransaction();
-
-      const newRNumber = app.app_rnumber + 1;
-      await connection.query(
-        "UPDATE application SET app_rnumber = ? WHERE app_acronym = ?",
-        [newRNumber, acronymLower]
-      );
-
-      const task_id = `${acronymLower}_${newRNumber}`;
-      const currentDate = new Date();
-      currentDate.setSeconds(currentDate.getSeconds() + 1);
-      const formattedDate = currentDate.getFullYear() + '-' +
-        ('0' + (currentDate.getMonth() + 1)).slice(-2) + '-' +
-        ('0' + currentDate.getDate()).slice(-2) + ' ' +
-        ('0' + currentDate.getHours()).slice(-2) + ':' +
-        ('0' + currentDate.getMinutes()).slice(-2) + ':' +
-        ('0' + currentDate.getSeconds()).slice(-2);
-
-      await connection.query(
-        "INSERT INTO task (task_id, task_name, task_description, task_plan, task_app_acronym, task_state, task_creator, task_owner, task_createDate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        [task_id, tasknameLower, task_description, null, acronymLower, 'open', usernameLower, usernameLower, formattedDate]
-      );
-
-      const initialNote = `User ${usernameLower} has created the task.`;
-      const auditTrail = JSON.stringify([{ user: usernameLower, state: 'open', date: formattedDate, message: initialNote, type: "system" }]);
-
-      await connection.query(
-        "INSERT INTO tasknote (task_id, tasknote_created, notes) VALUES (?, ?, ?)",
-        [task_id, formattedDate, auditTrail]
-      );
-
-      await connection.commit();
-      res.status(201).json({ code: "S_001", task_id: task_id });
-    } catch (error) {
-      await connection.rollback();
-      throw error;
-    } finally {
-      connection.release();
+    const [userResult] = await connection.query("SELECT * FROM user WHERE username = ?", [usernameLower]);
+    if (userResult.length === 0) {
+      throw new Error("E_AU1");
     }
+
+    const user = userResult[0];
+
+    // Check if the user password is valid
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) {
+      throw new Error("E_AU2");
+    }
+
+    // Check if the user is disabled
+    if (user.disabled === 1) {
+      throw new Error("E_AU3");
+    }
+
+    // Retrieve the application object with acronym
+    const [appResult] = await connection.query("SELECT * FROM application WHERE app_acronym = ?", [acronymLower]);
+    if (appResult.length === 0) {
+      throw new Error("E_TE2");
+    }
+
+    const app = appResult[0];
+    const groupPermitCreate = app.app_permit_create;
+
+    // Check user access rights
+    const [groupResult] = await connection.query(
+      "SELECT 1 FROM usergroup WHERE username = ? AND group_name = ?",
+      [usernameLower, groupPermitCreate]
+    );
+    if (groupResult.length === 0) {
+      throw new Error("E_AR1");
+    }
+
+    // Begin Transaction
+    await connection.beginTransaction();
+
+    const newRNumber = app.app_rnumber + 1;
+    await connection.query(
+      "UPDATE application SET app_rnumber = ? WHERE app_acronym = ?",
+      [newRNumber, acronymLower]
+    );
+
+    const task_id = `${acronymLower}_${newRNumber}`;
+    const currentDate = new Date();
+    currentDate.setSeconds(currentDate.getSeconds() + 1);
+    const formattedDate = currentDate.getFullYear() + '-' +
+      ('0' + (currentDate.getMonth() + 1)).slice(-2) + '-' +
+      ('0' + currentDate.getDate()).slice(-2) + ' ' +
+      ('0' + currentDate.getHours()).slice(-2) + ':' +
+      ('0' + currentDate.getMinutes()).slice(-2) + ':' +
+      ('0' + currentDate.getSeconds()).slice(-2);
+
+    await connection.query(
+      "INSERT INTO task (task_id, task_name, task_description, task_plan, task_app_acronym, task_state, task_creator, task_owner, task_createDate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      [task_id, tasknameLower, task_description, null, acronymLower, 'open', usernameLower, usernameLower, formattedDate]
+    );
+
+    const initialNote = `User ${usernameLower} has created the task.`;
+    const auditTrail = JSON.stringify([{ user: usernameLower, state: 'open', date: formattedDate, message: initialNote, type: "system" }]);
+
+    await connection.query(
+      "INSERT INTO tasknote (task_id, tasknote_created, notes) VALUES (?, ?, ?)",
+      [task_id, formattedDate, auditTrail]
+    );
+
+    await connection.commit();
+    res.status(201).json({ code: "S_001", task_id: task_id });
   } catch (error) {
+    console.log(error)
+    if (connection) await connection.rollback();
     if (error.code === 'ER_BAD_DB_ERROR' || error.code === 'ER_ACCESS_DENIED_ERROR' || error.code === 'ECONNREFUSED' || error.code === "ER_NO_DB_ERROR") {
       res.status(500).json({ code: "E_TE1" });
-    } else {
+    } else if (error.code === "ER_DATA_TOO_LONG") {
+      res.status(400).json({ code: "E_TE2" });
+    } else if (error.message) {
       res.status(500).json({ code: error.message });
+    } else {
+      res.status(500).json({ code: "E_TE4" });
     }
+  } finally {
+    if (connection) connection.release();
   }
 };
 
 const GetTaskbyState = async (req, res) => {
+  let connection;
   try {
 
     const { username, password, state } = req.body;
@@ -222,39 +223,51 @@ const GetTaskbyState = async (req, res) => {
 
     const usernameLower = username.toLowerCase();
     const connection = await db.getConnection();
-    try {
-      const [userResult] = await connection.query("SELECT * FROM user WHERE username = ?", [usernameLower]);
-      if (userResult.length === 0) {
-        throw new Error("E_AU1");
-      }
-
-      const user = userResult[0];
-
-      const isPasswordValid = await bcrypt.compare(password, user.password);
-      if (!isPasswordValid) {
-        throw new Error("E_AU2");
-      }
-
-      if (user.disabled === 1) {
-        throw new Error("E_AU3");
-      }
-
-      const [taskResult] = await connection.query("SELECT * FROM task WHERE task_state = ?", [state]);
-      res.status(200).json({ tasks: taskResult, code: "S_001" });
-    } finally {
-      connection.release();
+    const [userResult] = await connection.query("SELECT * FROM user WHERE username = ?", [usernameLower]);
+    if (userResult.length === 0) {
+      throw new Error("E_AU1");
     }
+
+    const user = userResult[0];
+
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) {
+      throw new Error("E_AU2");
+    }
+
+    if (user.disabled === 1) {
+      throw new Error("E_AU3");
+    }
+
+    const [taskResult] = await connection.query("SELECT * FROM task WHERE task_state = ?", [state]);
+
+    if (taskResult) {
+      res.status(200).json({ tasks: taskResult, code: "S_001" });
+    } else {
+      throw new Error("E_TE4")
+    }
+
+    connection.release();
+
   } catch (error) {
     console.log(error)
+    if (connection) await connection.rollback();
     if (error.code === 'ER_BAD_DB_ERROR' || error.code === 'ER_ACCESS_DENIED_ERROR' || error.code === 'ECONNREFUSED' || error.code === "ER_NO_DB_ERROR") {
       res.status(500).json({ code: "E_TE1" });
-    } else {
+    } else if (error.code === "ER_DATA_TOO_LONG") {
+      res.status(400).json({ code: "E_TE2" });
+    } else if (error.message) {
       res.status(500).json({ code: error.message });
+    } else {
+      res.status(500).json({ code: "E_TE4" });
     }
+  } finally {
+    if (connection) connection.release();
   }
 };
 
 const PromoteTask2Done = async (req, res) => {
+  let connection;
   try {
     const { username, password, task_id } = req.body;
     const newState = "done";
@@ -269,81 +282,83 @@ const PromoteTask2Done = async (req, res) => {
 
     const usernameLower = username.toString().toLowerCase();
     const connection = await db.getConnection();
-    try {
-      // Begin Transaction
-      await connection.beginTransaction();
+    // Begin Transaction
+    await connection.beginTransaction();
 
-      const [userResult] = await connection.query("SELECT * FROM user WHERE username = ?", [usernameLower]);
-      if (userResult.length === 0) {
-        throw new Error("E_AU1");
-      }
+    const [userResult] = await connection.query("SELECT * FROM user WHERE username = ?", [usernameLower]);
+    if (userResult.length === 0) {
+      throw new Error("E_AU1");
+    }
 
-      const user = userResult[0];
+    const user = userResult[0];
 
-      const isPasswordValid = await bcrypt.compare(password, user.password);
-      if (!isPasswordValid) {
-        throw new Error("E_AU2");
-      }
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) {
+      throw new Error("E_AU2");
+    }
 
-      if (user.disabled === 1) {
-        throw new Error("E_AU3");
-      }
+    if (user.disabled === 1) {
+      throw new Error("E_AU3");
+    }
 
-      const [taskResult] = await connection.query("SELECT * FROM task WHERE task_id = ?", [task_id]);
-      if (taskResult.length === 0) {
-        throw new Error("E_TE2");
-      }
+    const [taskResult] = await connection.query("SELECT * FROM task WHERE task_id = ?", [task_id]);
+    if (taskResult.length === 0) {
+      throw new Error("E_TE2");
+    }
 
-      const task = taskResult[0];
-      if (!validStates.includes(task.task_state) || task.task_state !== "doing") {
-        throw new Error("E_TE3");
-      }
+    const task = taskResult[0];
+    if (!validStates.includes(task.task_state) || task.task_state !== "doing") {
+      throw new Error("E_TE3");
+    }
 
-      const [updateResult] = await connection.query("UPDATE task SET task_state = ? WHERE task_id = ?", [newState, task_id]);
-      if (updateResult.affectedRows > 0) {
+    const [updateResult] = await connection.query("UPDATE task SET task_state = ? WHERE task_id = ?", [newState, task_id]);
+    if (updateResult.affectedRows > 0) {
 
-        // Get the current date and time in local format
-        const currentDate = new Date();
-        currentDate.setSeconds(currentDate.getSeconds() + 1);
-        const formattedDate = currentDate.getFullYear() + '-' +
-          ('0' + (currentDate.getMonth() + 1)).slice(-2) + '-' +
-          ('0' + currentDate.getDate()).slice(-2) + ' ' +
-          ('0' + currentDate.getHours()).slice(-2) + ':' +
-          ('0' + currentDate.getMinutes()).slice(-2) + ':' +
-          ('0' + currentDate.getSeconds()).slice(-2);
-        const stateChangeMessage = `Task submitted by ${usernameLower}`
-        const messageInitiator = 'system';
+      // Get the current date and time in local format
+      const currentDate = new Date();
+      currentDate.setSeconds(currentDate.getSeconds() + 1);
+      const formattedDate = currentDate.getFullYear() + '-' +
+        ('0' + (currentDate.getMonth() + 1)).slice(-2) + '-' +
+        ('0' + currentDate.getDate()).slice(-2) + ' ' +
+        ('0' + currentDate.getHours()).slice(-2) + ':' +
+        ('0' + currentDate.getMinutes()).slice(-2) + ':' +
+        ('0' + currentDate.getSeconds()).slice(-2);
+      const stateChangeMessage = `Task submitted by ${usernameLower}`
+      const messageInitiator = 'system';
 
-        await connection.query(
-          'INSERT INTO tasknote (task_id, tasknote_created, notes) VALUES (?, ?, ?)',
-          [task_id, formattedDate, JSON.stringify([{ user: usernameLower, state: "done", date: formattedDate, message: stateChangeMessage, type: messageInitiator }])]
-        );
+      await connection.query(
+        'INSERT INTO tasknote (task_id, tasknote_created, notes) VALUES (?, ?, ?)',
+        [task_id, formattedDate, JSON.stringify([{ user: usernameLower, state: "done", date: formattedDate, message: stateChangeMessage, type: messageInitiator }])]
+      );
 
-        await connection.commit(); // Commit the transaction if successful
+      await connection.commit(); // Commit the transaction if successful
 
-        const [appResult] = await connection.query('SELECT task_app_acronym FROM task WHERE task_id = ?', [task_id]);
-        const appAcronym = appResult[0].task_app_acronym
-        const [permitGroupResult] = await connection.query('SELECT app_permit_done FROM application WHERE app_acronym = ?', [appAcronym]);
-        const permitGroup = permitGroupResult[0].app_permit_done
+      const [appResult] = await connection.query('SELECT task_app_acronym FROM task WHERE task_id = ?', [task_id]);
+      const appAcronym = appResult[0].task_app_acronym
+      const [permitGroupResult] = await connection.query('SELECT app_permit_done FROM application WHERE app_acronym = ?', [appAcronym]);
+      const permitGroup = permitGroupResult[0].app_permit_done
 
-        await sendTaskNotification(task_id, task.task_name, permitGroup);
+      const [emailResult] = await sendTaskNotification(task_id, task.task_name, permitGroup);
 
+      if (emailResult) {
         res.status(200).json({ code: "S_001" });
       } else {
         throw new Error("E_TE4");
       }
-    } catch (error) {
-      await connection.rollback(); // Rollback the transaction on error
-      throw error;
-    } finally {
-      connection.release();
     }
   } catch (error) {
+    if (connection) await connection.rollback();
     if (error.code === 'ER_BAD_DB_ERROR' || error.code === 'ER_ACCESS_DENIED_ERROR' || error.code === 'ECONNREFUSED' || error.code === "ER_NO_DB_ERROR") {
       res.status(500).json({ code: "E_TE1" });
-    } else {
+    } else if (error.code === "ER_DATA_TOO_LONG") {
+      res.status(400).json({ code: "E_TE2" });
+    } else if (error.message) {
       res.status(500).json({ code: error.message });
+    } else {
+      res.status(500).json({ code: "E_TE4" });
     }
+  } finally {
+    if (connection) connection.release();
   }
 };
 
