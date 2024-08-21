@@ -5,6 +5,20 @@ const nodemailer = require('nodemailer')
 
 const db = require("./db"); // Import db from app.js
 
+const errorCodes = {
+  'E_SP1': 400, // Duplicate parameters in payload structure
+  'E_SP2': 400, // Key issues in payload structure
+  'E_AU1': 401, // Invalid/valid user authentication error
+  'E_AU2': 401, // User credentials incorrect
+  'E_AU3': 403, // User disabled/enabled check failure
+  'E_AR1': 403, // Invalid permission in access rights
+  'E_TE1': 500, // Cannot connect to the database (transaction error)
+  'E_TE2': 400, // Wrong SQL fields (transaction error)
+  'E_TE3': 400, // Invalid Task State
+  'E_TE4': 500  // All other database error
+};
+
+
 const validateKeys = (obj, expectedKeys) => {
   const keys = Object.keys(obj);
   const extraKeys = keys.filter(key => !expectedKeys.includes(key));
@@ -187,16 +201,24 @@ const CreateTask = async (req, res) => {
     await connection.commit();
     res.status(201).json({ code: "S_001", task_id: task_id });
   } catch (error) {
-    console.log(error)
+    console.log(error);
     if (connection) await connection.rollback();
-    if (error.code === 'ER_BAD_DB_ERROR' || error.code === 'ER_ACCESS_DENIED_ERROR' || error.code === 'ECONNREFUSED' || error.code === "ER_NO_DB_ERROR") {
-      res.status(500).json({ code: "E_TE1" });
+
+    // Check if the error message corresponds to a defined error code
+    const statusCode = errorCodes[error.message] || 500;
+    const errorCode = error.message in errorCodes ? error.message : 'E_TE4';
+
+    // Handle specific MySQL error codes with custom logic
+    if (error.code === 'ER_BAD_DB_ERROR' || 
+        error.code === 'ER_ACCESS_DENIED_ERROR' || 
+        error.code === 'ECONNREFUSED' || 
+        error.code === 'ER_NO_DB_ERROR') {
+        res.status(500).json({ code: "E_TE1" });
     } else if (error.code === "ER_DATA_TOO_LONG") {
-      res.status(400).json({ code: "E_TE2" });
-    } else if (error.message) {
-      res.status(500).json({ code: error.message });
+        res.status(400).json({ code: "E_TE2" });
     } else {
-      res.status(500).json({ code: "E_TE4" });
+        // Use the statusCode and errorCode derived from the errorCodes dictionary
+        res.status(statusCode).json({ code: errorCode });
     }
   } finally {
     if (connection) connection.release();
@@ -207,21 +229,23 @@ const GetTaskbyState = async (req, res) => {
   let connection;
   try {
 
-    const { username, password, state } = req.body;
+    const { username, password, task_state } = req.body;
     const validStates = ["open", "todo", "doing", "done", "closed"];
 
-    if (!username || !password || !state) {
+    if (!username || !password || !task_state) {
       throw new Error("E_SP1");
     }
 
     // Expected keys validation
-    validateKeys(req.body, ["username", "password", "state"]);
+    validateKeys(req.body, ["username", "password", "task_state"]);
 
-    if (state.trim().length <= 0 || !validStates.includes(state)) {
+    const usernameLower = username.toLowerCase();
+    const stateLower = task_state.toLowerCase();
+
+    if (stateLower.trim().length <= 0 || !validStates.includes(stateLower)) {
       throw new Error("E_TE2");
     }
 
-    const usernameLower = username.toLowerCase();
     const connection = await db.getConnection();
     const [userResult] = await connection.query("SELECT * FROM user WHERE username = ?", [usernameLower]);
     if (userResult.length === 0) {
@@ -239,7 +263,7 @@ const GetTaskbyState = async (req, res) => {
       throw new Error("E_AU3");
     }
 
-    const [taskResult] = await connection.query("SELECT * FROM task WHERE task_state = ?", [state]);
+    const [taskResult] = await connection.query("SELECT * FROM task WHERE task_state = ?", [stateLower]);
 
     if (taskResult) {
       res.status(200).json({ tasks: taskResult, code: "S_001" });
@@ -247,21 +271,27 @@ const GetTaskbyState = async (req, res) => {
       throw new Error("E_TE4")
     }
 
-    connection.release();
-
   } catch (error) {
-    console.log(error)
+    console.log(error);
     if (connection) await connection.rollback();
-    if (error.code === 'ER_BAD_DB_ERROR' || error.code === 'ER_ACCESS_DENIED_ERROR' || error.code === 'ECONNREFUSED' || error.code === "ER_NO_DB_ERROR") {
-      res.status(500).json({ code: "E_TE1" });
+
+    // Check if the error message corresponds to a defined error code
+    const statusCode = errorCodes[error.message] || 500;
+    const errorCode = error.message in errorCodes ? error.message : 'E_TE4';
+
+    // Handle specific MySQL error codes with custom logic
+    if (error.code === 'ER_BAD_DB_ERROR' || 
+        error.code === 'ER_ACCESS_DENIED_ERROR' || 
+        error.code === 'ECONNREFUSED' || 
+        error.code === 'ER_NO_DB_ERROR') {
+        res.status(500).json({ code: "E_TE1" });
     } else if (error.code === "ER_DATA_TOO_LONG") {
-      res.status(400).json({ code: "E_TE2" });
-    } else if (error.message) {
-      res.status(500).json({ code: error.message });
+        res.status(400).json({ code: "E_TE2" });
     } else {
-      res.status(500).json({ code: "E_TE4" });
+        // Use the statusCode and errorCode derived from the errorCodes dictionary
+        res.status(statusCode).json({ code: errorCode });
     }
-  } finally {
+} finally {
     if (connection) connection.release();
   }
 };
@@ -269,7 +299,7 @@ const GetTaskbyState = async (req, res) => {
 const PromoteTask2Done = async (req, res) => {
   let connection;
   try {
-    const { username, password, task_id } = req.body;
+    const { username, password, task_id, note } = req.body;
     const newState = "done";
     const validStates = ["open", "todo", "doing", "done", "closed"];
 
@@ -278,9 +308,10 @@ const PromoteTask2Done = async (req, res) => {
     }
 
     // Expected keys validation
-    validateKeys(req.body, ["username", "password", "task_id"]);
+    validateKeys(req.body, ["username", "password", "task_id", "note"]);
 
     const usernameLower = username.toString().toLowerCase();
+    
     const connection = await db.getConnection();
     // Begin Transaction
     await connection.beginTransaction();
@@ -311,53 +342,86 @@ const PromoteTask2Done = async (req, res) => {
       throw new Error("E_TE3");
     }
 
+    // retrieve app acronym 
+    const [appResult] = await connection.query('SELECT task_app_acronym FROM task WHERE task_id = ?', [task_id]);
+    const appAcronym = appResult[0].task_app_acronym
+
+    // retrieve permit group for permit done
+    const [permitGroupResult] = await connection.query('SELECT app_permit_done FROM application WHERE app_acronym = ?', [appAcronym]);
+    const permitGroup = permitGroupResult[0].app_permit_done
+
+    // retrieve user current group(s)
+    const [userGroupResult] = await connection.query('SELECT group_name FROM usergroup WHERE username = ?', [user.username])
+    const userGroup = userGroupResult[0].group_name
+
+    console.log("GroupName: " + userGroup)
+
+    if (userGroup !== permitGroup) {
+      throw new Error("E_AR1")
+    }
+
+
     const [updateResult] = await connection.query("UPDATE task SET task_state = ? WHERE task_id = ?", [newState, task_id]);
     if (updateResult.affectedRows > 0) {
 
       // Get the current date and time in local format
       const currentDate = new Date();
-      currentDate.setSeconds(currentDate.getSeconds() + 1);
       const formattedDate = currentDate.getFullYear() + '-' +
         ('0' + (currentDate.getMonth() + 1)).slice(-2) + '-' +
         ('0' + currentDate.getDate()).slice(-2) + ' ' +
         ('0' + currentDate.getHours()).slice(-2) + ':' +
         ('0' + currentDate.getMinutes()).slice(-2) + ':' +
         ('0' + currentDate.getSeconds()).slice(-2);
+
       const stateChangeMessage = `Task submitted by ${usernameLower}`
-      const messageInitiator = 'system';
 
       await connection.query(
         'INSERT INTO tasknote (task_id, tasknote_created, notes) VALUES (?, ?, ?)',
-        [task_id, formattedDate, JSON.stringify([{ user: usernameLower, state: "done", date: formattedDate, message: stateChangeMessage, type: messageInitiator }])]
+        [task_id, formattedDate, JSON.stringify([{ user: usernameLower, state: "done", date: formattedDate, message: stateChangeMessage, type: "system" }])]
       );
+
+      if (note) {
+        currentDate.setSeconds(currentDate.getSeconds() + 1);
+        const formattedDate2 = currentDate.getFullYear() + '-' +
+          ('0' + (currentDate.getMonth() + 1)).slice(-2) + '-' +
+          ('0' + currentDate.getDate()).slice(-2) + ' ' +
+          ('0' + currentDate.getHours()).slice(-2) + ':' +
+          ('0' + currentDate.getMinutes()).slice(-2) + ':' +
+          ('0' + currentDate.getSeconds()).slice(-2);
+
+        await connection.query(
+          'INSERT INTO tasknote (task_id, tasknote_created, notes) VALUES (?, ?, ?)',
+          [task_id, formattedDate2, JSON.stringify([{ user: usernameLower, state: "done", date: formattedDate2, message: note, type: "user" }])]
+        );
+      }
 
       await connection.commit(); // Commit the transaction if successful
 
-      const [appResult] = await connection.query('SELECT task_app_acronym FROM task WHERE task_id = ?', [task_id]);
-      const appAcronym = appResult[0].task_app_acronym
-      const [permitGroupResult] = await connection.query('SELECT app_permit_done FROM application WHERE app_acronym = ?', [appAcronym]);
-      const permitGroup = permitGroupResult[0].app_permit_done
+      await sendTaskNotification(task_id, task.task_name, permitGroup);
 
-      const [emailResult] = await sendTaskNotification(task_id, task.task_name, permitGroup);
-
-      if (emailResult) {
-        res.status(200).json({ code: "S_001" });
-      } else {
-        throw new Error("E_TE4");
-      }
+      res.status(200).json({ code: "S_001" });
     }
   } catch (error) {
+    console.log(error);
     if (connection) await connection.rollback();
-    if (error.code === 'ER_BAD_DB_ERROR' || error.code === 'ER_ACCESS_DENIED_ERROR' || error.code === 'ECONNREFUSED' || error.code === "ER_NO_DB_ERROR") {
-      res.status(500).json({ code: "E_TE1" });
+
+    // Check if the error message corresponds to a defined error code
+    const statusCode = errorCodes[error.message] || 500;
+    const errorCode = error.message in errorCodes ? error.message : 'E_TE4';
+
+    // Handle specific MySQL error codes with custom logic
+    if (error.code === 'ER_BAD_DB_ERROR' || 
+        error.code === 'ER_ACCESS_DENIED_ERROR' || 
+        error.code === 'ECONNREFUSED' || 
+        error.code === 'ER_NO_DB_ERROR') {
+        res.status(500).json({ code: "E_TE1" });
     } else if (error.code === "ER_DATA_TOO_LONG") {
-      res.status(400).json({ code: "E_TE2" });
-    } else if (error.message) {
-      res.status(500).json({ code: error.message });
+        res.status(400).json({ code: "E_TE2" });
     } else {
-      res.status(500).json({ code: "E_TE4" });
+        // Use the statusCode and errorCode derived from the errorCodes dictionary
+        res.status(statusCode).json({ code: errorCode });
     }
-  } finally {
+} finally {
     if (connection) connection.release();
   }
 };
