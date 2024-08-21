@@ -295,7 +295,7 @@ const PromoteTask2Done = async (req, res) => {
       }
 
       const task = taskResult[0];
-      if (!validStates.includes(task.task_state) && task.task_state !== "doing") {
+      if (!validStates.includes(task.task_state) || task.task_state !== "doing") {
         throw new Error("E_TE3");
       }
 
