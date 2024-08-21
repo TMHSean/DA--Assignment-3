@@ -1,10 +1,9 @@
 const express = require("express");
 const bodyParser = require("body-parser");
-const cors = require("cors"); // Ensure cors is required
+const cors = require("cors");
 require("dotenv").config();
 
-const db = require("./db")
-
+const db = require("./db");
 const taskController = require("./controller");
 
 const app = express();
@@ -16,27 +15,23 @@ const corsOptions = {
   allowedHeaders: "Content-Type,Authorization",
 };
 
-app.use(cors(corsOptions)); // Use the cors middleware
+app.use(cors(corsOptions));
 app.use(bodyParser.json());
 
-app.use("/", taskController); // Prefix your routes with /api
+// Define allowed paths
+const allowedPaths = ["/CreateTask", "/GetTaskbyState", "/PromoteTask2Done"];
+
+// Middleware to check if req.path is allowed
+app.use((req, res, next) => {
+  if (!allowedPaths.includes(req.path)) {
+    return res.status(404).json({ code: "E_VU2" });
+  }
+  next(); // Continue to the next middleware or route handler
+});
+
+app.use("/", taskController);
 
 // Start the server
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
 });
-
-// Check the initial connection
-(async () => {
-  try {
-    // Perform a simple query to check the connection
-    const [rows] = await db.query("SELECT 1");
-    console.log("Database connection is working.");
-  } catch (err) {
-    console.error("Error connecting to the database:", err);
-    process.exit(1);
-  }
-})();
-
-// Export db for use in other files
-module.exports = { db };

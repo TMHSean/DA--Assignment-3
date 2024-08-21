@@ -1,256 +1,356 @@
 const express = require("express");
 const router = express.Router();
 const bcrypt = require("bcryptjs");
+const nodemailer = require('nodemailer')
 
 const db = require("./db"); // Import db from app.js
+
+const validateKeys = (obj, expectedKeys) => {
+  const keys = Object.keys(obj);
+  const extraKeys = keys.filter(key => !expectedKeys.includes(key));
+  if (extraKeys.length > 0) {
+    throw new Error("E_SP2"); // E_SP2: Duplicate parameters or key issues
+  }
+
+};
+
+
+// Helper function to fetch users in a specific group
+const fetchUsersInGroup = async (groupName) => {
+  try {
+    const [results] = await db.query(
+      "SELECT username FROM usergroup WHERE group_name = ?",
+      [groupName]
+    );
+    return results.map((row) => row.username);
+  } catch (err) {
+    console.error("Error fetching users in group:", err);
+    throw new Error("Server error");
+  }
+};
+
+const getUserEmail = async (username) => {
+  try {
+    const [results] = await db.query(
+      "SELECT email FROM user WHERE username = ?",
+      [username]
+    );
+    return results.length > 0 ? results[0].email : null;
+  } catch (err) {
+    console.error("Error fetching user details:", err);
+    throw new Error("Server error");
+  }
+};
+
+const transporter = nodemailer.createTransport({
+  service: 'Gmail',
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS
+  }
+});
+
+const sendTaskNotification = async (taskId, taskName, groupName) => {
+  try {
+    const usersInGroup = await fetchUsersInGroup(groupName);
+
+    // Fetch emails for each user
+    const emailPromises = usersInGroup.map(async (user) => {
+      if (user === '-') {
+        // Skip if the username is "-"
+        return null;
+      }
+
+      const email = await getUserEmail(user);
+      if (email) {
+        const mailOptions = {
+          from: process.env.EMAIL_USER,
+          to: email,
+          subject: 'Task Completed Notification',
+          html: `Dear ${user}, 
+          <br><br> 
+          The task "<strong>${taskName}</strong>" has been marked as done. Please review the task.
+          <br><br>
+          Click <a href="http://localhost:${process.env.LOCALHOST_PORT}/">here</a> to login.
+          <br><br>
+          Best regards,
+          <br>
+          Digital Academy`
+
+        };
+        return transporter.sendMail(mailOptions);
+      }
+    });
+
+    // Filter out null values before sending all emails
+    const validEmailPromises = (await Promise.all(emailPromises)).filter(Boolean);
+
+    await Promise.all(validEmailPromises);
+    console.log('Notifications sent successfully');
+  } catch (error) {
+    console.error('Error sending notifications:', error);
+  }
+};
 
 
 // Controller Function to create a new task
 const CreateTask = async (req, res) => {
-  const { username, password, acronym, taskname, description } = req.body;
-
-  const validParams = ["username", "password", "acronym", "taskname", "description"]
-
-
-
-  // URL Validation
-  if (req.originalUrl !== "/CreateTask") {
-    return res.status(400).json({ code: "VU_1" });
-  }
-
-  // Payload Structure Validation
-  if (!username || !acronym || !password || !taskname) {
-    return res.status(400).json({ code: "SP_2" });
-  }
-
-  const usernameLower = username.toLowerCase();
-  const acronymLower = acronym.toLowerCase();
-  const tasknameLower = taskname.toLowerCase();
-
-  let connection;
   try {
+
+    const { username, password, app_acronym, task_name, task_description } = req.body;
+
+    // Check for missing or case sensitive parameters
+    if (!username || !app_acronym || !password || !task_name) {
+      throw new Error("E_SP1");
+    }
+
+    if (task_name.trim().length <= 0) {
+      throw new Error("E_TE2");
+    }
+
+    // Expected keys validation || checking for additional parameters in the payload
+    validateKeys(req.body, ["username", "password", "app_acronym", "task_name", "task_description"]);
+
+    const usernameLower = username.toLowerCase();
+    const acronymLower = app_acronym.toLowerCase();
+    const tasknameLower = task_name.toLowerCase();
 
     // User Authentication
-    connection = await db.getConnection();
-    const [userResult] = await connection.query("SELECT * FROM user WHERE username = ?", [usernameLower]);
-    if (userResult.length === 0) {
-      return res.status(401).json({ code: "AU_1" });
+    const connection = await db.getConnection();
+    try {
+      const [userResult] = await connection.query("SELECT * FROM user WHERE username = ?", [usernameLower]);
+      if (userResult.length === 0) {
+        throw new Error("E_AU1");
+      }
+
+      const user = userResult[0];
+
+      // Check if the user password is valid
+      const isPasswordValid = await bcrypt.compare(password, user.password);
+      if (!isPasswordValid) {
+        throw new Error("E_AU2");
+      }
+
+      // Check if the user is disabled
+      if (user.disabled === 1) {
+        throw new Error("E_AU3");
+      }
+
+      // Retrieve the application object with acronym
+      const [appResult] = await connection.query("SELECT * FROM application WHERE app_acronym = ?", [acronymLower]);
+      if (appResult.length === 0) {
+        throw new Error("E_TE2");
+      }
+
+      const app = appResult[0];
+      const groupPermitCreate = app.app_permit_create;
+
+      // Check user access rights
+      const [groupResult] = await connection.query(
+        "SELECT 1 FROM usergroup WHERE username = ? AND group_name = ?",
+        [usernameLower, groupPermitCreate]
+      );
+      if (groupResult.length === 0) {
+        throw new Error("E_AR1");
+      }
+
+      // Begin Transaction
+      await connection.beginTransaction();
+
+      const newRNumber = app.app_rnumber + 1;
+      await connection.query(
+        "UPDATE application SET app_rnumber = ? WHERE app_acronym = ?",
+        [newRNumber, acronymLower]
+      );
+
+      const task_id = `${acronymLower}_${newRNumber}`;
+      const currentDate = new Date();
+      currentDate.setSeconds(currentDate.getSeconds() + 1);
+      const formattedDate = currentDate.getFullYear() + '-' +
+        ('0' + (currentDate.getMonth() + 1)).slice(-2) + '-' +
+        ('0' + currentDate.getDate()).slice(-2) + ' ' +
+        ('0' + currentDate.getHours()).slice(-2) + ':' +
+        ('0' + currentDate.getMinutes()).slice(-2) + ':' +
+        ('0' + currentDate.getSeconds()).slice(-2);
+
+      await connection.query(
+        "INSERT INTO task (task_id, task_name, task_description, task_plan, task_app_acronym, task_state, task_creator, task_owner, task_createDate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [task_id, tasknameLower, task_description, null, acronymLower, 'open', usernameLower, usernameLower, formattedDate]
+      );
+
+      const initialNote = `User ${usernameLower} has created the task.`;
+      const auditTrail = JSON.stringify([{ user: usernameLower, state: 'open', date: formattedDate, message: initialNote, type: "system" }]);
+
+      await connection.query(
+        "INSERT INTO tasknote (task_id, tasknote_created, notes) VALUES (?, ?, ?)",
+        [task_id, formattedDate, auditTrail]
+      );
+
+      await connection.commit();
+      res.status(201).json({ code: "S_001", task_id: task_id });
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
     }
-
-    const user = userResult[0];
-
-    // to check if user password is valid 
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-    if (!isPasswordValid) {
-      return res.status(401).json({ code: "AU_2" });
-    }
-
-    // to check if the user is disabled
-    if (user.disabled === 1) {
-      return res.status(403).json({ code: "AU_3" });
-    }
-
-    // Retrieve the application object with acronym
-    const [appResult] = await connection.query("SELECT * FROM application WHERE app_acronym = ?", [acronymLower]);
-    if (appResult.length === 0) {
-      return res.status(404).json({ code: "TE_2" });
-    }
-
-    const app = appResult[0]
-
-    // declare the group that have app permit create permissions
-    const groupPermitCreate = app.app_permit_create;
-
-    // Check user access rights
-    const [groupResult] = await connection.query(
-      "SELECT 1 FROM usergroup WHERE username = ? AND group_name = ?",
-      [usernameLower, groupPermitCreate]
-    );
-
-    if (groupResult.length === 0) {
-      return res.status(403).json({ code: "AR_1" });
-    }
-
-    // Begin Transaction
-    await connection.beginTransaction();
-
-    const rNumber = app.app_rnumber;
-
-    const newRNumber = rNumber + 1;
-
-    await connection.query(
-      "UPDATE application SET app_rnumber = ? WHERE app_acronym = ?",
-      [newRNumber, acronymLower]
-    );
-
-    // Create task_id
-    const taskId = `${acronymLower}_${newRNumber}`;
-
-    // Get the current date and time in local format
-    const currentDate = new Date();
-    const formattedDate = currentDate.getFullYear() + '-' +
-      ('0' + (currentDate.getMonth() + 1)).slice(-2) + '-' +
-      ('0' + currentDate.getDate()).slice(-2) + ' ' +
-      ('0' + currentDate.getHours()).slice(-2) + ':' +
-      ('0' + currentDate.getMinutes()).slice(-2) + ':' +
-      ('0' + currentDate.getSeconds()).slice(-2);
-
-    const taskPlan = null;
-
-    // Insert new task
-    await connection.query(
-      "INSERT INTO task (task_id, task_name, task_description, task_plan, task_app_acronym, task_state, task_creator, task_owner, task_createDate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      [taskId, tasknameLower, description, null, acronymLower, 'open', usernameLower, usernameLower, formattedDate]
-    );
-
-    // Create initial audit trail entry
-    const initialNote = `User ${usernameLower} has created the task.`;
-    const messageInitiator = "system";
-    const auditTrail = JSON.stringify([{ user: usernameLower, state: 'open', date: formattedDate, message: initialNote, type: messageInitiator }]);
-    await connection.query(
-      "INSERT INTO tasknote (task_id, tasknote_created, notes) VALUES (?, ?, ?)",
-      [taskId, formattedDate, auditTrail]
-    );
-
-    // Commit Transaction
-    await connection.commit();
-    res.status(201).json({ message: "Task created successfully" }); // remove message
   } catch (error) {
-    if (connection) await connection.rollback();
-    console.error("Transaction Error:", error.message);
-    res.status(500).json({ code: "TE_1" });
-  } finally {
-    if (connection) connection.release();
+    if (error.code === 'ER_BAD_DB_ERROR' || error.code === 'ER_ACCESS_DENIED_ERROR' || error.code === 'ECONNREFUSED' || error.code === "ER_NO_DB_ERROR") {
+      res.status(500).json({ code: "E_TE1" });
+    } else {
+      res.status(500).json({ code: error.message });
+    }
   }
 };
-
 
 const GetTaskbyState = async (req, res) => {
-  const { username, password, state } = req.body;
-
-  // Define valid states
-  const validStates = ["open", "todo", "doing", "done", "closed"];
-
-  // Payload Structure Validation
-  if (!username || !password) {
-    return res.status(400).json({ code: "SP_2" });
-  }
-
-  const usernameLower = username.toLowerCase();
-
-  // Validate state
-  if (!validStates.includes(state)) {
-    return res.status(400).json({ code: "VS_1" }); // Use appropriate error code
-  }
-
-  let connection;
   try {
-    // Get a database connection
-    connection = await db.getConnection();
 
-    const [userResult] = await connection.query("SELECT * FROM user WHERE username = ?", [usernameLower]);
-    if (userResult.length === 0) {
-      return res.status(401).json({ code: "AU_1" });
+    const { username, password, state } = req.body;
+    const validStates = ["open", "todo", "doing", "done", "closed"];
+
+    if (!username || !password || !state) {
+      throw new Error("E_SP1");
     }
 
-    const user = userResult[0];
+    // Expected keys validation
+    validateKeys(req.body, ["username", "password", "state"]);
 
-    // to check if user password is valid 
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-    if (!isPasswordValid) {
-      return res.status(401).json({ code: "AU_2" });
+    if (state.trim().length <= 0 || !validStates.includes(state)) {
+      throw new Error("E_TE2");
     }
 
-    // to check if the user is disabled
-    if (user.disabled === 1) {
-      return res.status(403).json({ code: "AU_3" });
+    const usernameLower = username.toLowerCase();
+    const connection = await db.getConnection();
+    try {
+      const [userResult] = await connection.query("SELECT * FROM user WHERE username = ?", [usernameLower]);
+      if (userResult.length === 0) {
+        throw new Error("E_AU1");
+      }
+
+      const user = userResult[0];
+
+      const isPasswordValid = await bcrypt.compare(password, user.password);
+      if (!isPasswordValid) {
+        throw new Error("E_AU2");
+      }
+
+      if (user.disabled === 1) {
+        throw new Error("E_AU3");
+      }
+
+      const [taskResult] = await connection.query("SELECT * FROM task WHERE task_state = ?", [state]);
+      res.status(200).json({ tasks: taskResult, code: "S_001" });
+    } finally {
+      connection.release();
     }
-
-    // Query to get tasks by state
-    const [taskResult] = await connection.query("SELECT * FROM task WHERE task_state = ?", [state]);
-
-    // Send the result
-    res.status(200).json(taskResult);
-
   } catch (error) {
-    console.error("Error fetching tasks by state:", error.message);
-    res.status(500).json({ code: "TE_1" }); // Use appropriate error code
-  } finally {
-    if (connection) connection.release();
+    console.log(error)
+    if (error.code === 'ER_BAD_DB_ERROR' || error.code === 'ER_ACCESS_DENIED_ERROR' || error.code === 'ECONNREFUSED' || error.code === "ER_NO_DB_ERROR") {
+      res.status(500).json({ code: "E_TE1" });
+    } else {
+      res.status(500).json({ code: error.message });
+    }
   }
 };
 
-
 const PromoteTask2Done = async (req, res) => {
-  const { username, password, taskid, newState } = req.body;
-
-  // Payload Structure Validation
-  if (!username || !password || !taskid || !newState) {
-    return res.status(400).json({ code: "SP_2" });
-  }
-
-  const usernameLower = username.toLowerCase();
-
-  let connection;
   try {
-    // Get a database connection
-    connection = await db.getConnection();
+    const { username, password, task_id } = req.body;
+    const newState = "done";
+    const validStates = ["open", "todo", "doing", "done", "closed"];
 
-    // Check if the user exists
-    const [userResult] = await connection.query("SELECT * FROM user WHERE username = ?", [usernameLower]);
-    if (userResult.length === 0) {
-      return res.status(401).json({ code: "AU_1" });
+    if (!username || !password || !task_id) {
+      throw new Error("E_SP1");
     }
 
-    const user = userResult[0];
+    // Expected keys validation
+    validateKeys(req.body, ["username", "password", "task_id"]);
 
-    // Check if the user password is valid
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-    if (!isPasswordValid) {
-      return res.status(401).json({ code: "AU_2" });
+    const usernameLower = username.toLowerCase();
+    const connection = await db.getConnection();
+    try {
+      // Begin Transaction
+      await connection.beginTransaction();
+
+      const [userResult] = await connection.query("SELECT * FROM user WHERE username = ?", [usernameLower]);
+      if (userResult.length === 0) {
+        throw new Error("E_AU1");
+      }
+
+      const user = userResult[0];
+
+      const isPasswordValid = await bcrypt.compare(password, user.password);
+      if (!isPasswordValid) {
+        throw new Error("E_AU2");
+      }
+
+      if (user.disabled === 1) {
+        throw new Error("E_AU3");
+      }
+
+      const [taskResult] = await connection.query("SELECT * FROM task WHERE task_id = ?", [task_id]);
+      if (taskResult.length === 0) {
+        throw new Error("E_TE2");
+      }
+
+      const task = taskResult[0];
+      if (!validStates.includes(task.task_state) && task.task_state !== "doing") {
+        throw new Error("E_TE3");
+      }
+
+      const [updateResult] = await connection.query("UPDATE task SET task_state = ? WHERE task_id = ?", [newState, task_id]);
+      if (updateResult.affectedRows > 0) {
+
+        // Get the current date and time in local format
+        const currentDate = new Date();
+        currentDate.setSeconds(currentDate.getSeconds() + 1);
+        const formattedDate = currentDate.getFullYear() + '-' +
+          ('0' + (currentDate.getMonth() + 1)).slice(-2) + '-' +
+          ('0' + currentDate.getDate()).slice(-2) + ' ' +
+          ('0' + currentDate.getHours()).slice(-2) + ':' +
+          ('0' + currentDate.getMinutes()).slice(-2) + ':' +
+          ('0' + currentDate.getSeconds()).slice(-2);
+        const stateChangeMessage = `Task submitted by ${usernameLower}`
+        const messageInitiator = 'system';
+
+        await connection.query(
+          'INSERT INTO tasknote (task_id, tasknote_created, notes) VALUES (?, ?, ?)',
+          [task_id, formattedDate, JSON.stringify([{ user: usernameLower, state: "done", date: formattedDate, message: stateChangeMessage, type: messageInitiator }])]
+        );
+
+        await connection.commit(); // Commit the transaction if successful
+
+        const [appResult] = await connection.query('SELECT task_app_acronym FROM task WHERE task_id = ?', [task_id]);
+        const appAcronym = appResult[0].task_app_acronym
+        const [permitGroupResult] = await connection.query('SELECT app_permit_done FROM application WHERE app_acronym = ?', [appAcronym]);
+        const permitGroup = permitGroupResult[0].app_permit_done
+
+        await sendTaskNotification(task_id, task.task_name, permitGroup);
+
+        res.status(200).json({ code: "S_001" });
+      } else {
+        throw new Error("E_TE4");
+      }
+    } catch (error) {
+      await connection.rollback(); // Rollback the transaction on error
+      throw error;
+    } finally {
+      connection.release();
     }
-
-    // Check if the user is disabled
-    if (user.disabled === 1) {
-      return res.status(403).json({ code: "AU_3" });
-    }
-
-    // Check if the task exists
-    const [taskResult] = await connection.query("SELECT * FROM task WHERE task_id = ?", [taskid]);
-    if (taskResult.length === 0) {
-      return res.status(404).json({ code: "TE_2" }); // Changed to 404 as task not found
-    }
-
-    const task = taskResult[0];
-    const currentTaskState = task.task_state;
-
-    // Validate if the state transition is allowed
-    if (currentTaskState !== "doing" || newState !== "done") {
-      return res.status(400).json({ code: "TE_3" });
-    }
-
-    // Update the task state
-    const [updateResult] = await connection.query("UPDATE task SET task_state = ? WHERE task_id = ?", [newState, taskid]);
-
-    if (updateResult.affectedRows > 0) {
-      return res.status(200).json({ message: "Task updated successfully" });
-    } else {
-      return res.status(500).json({ code: "TE_4" }); // Custom code for unexpected error
-    }
-
   } catch (error) {
-    console.error("Error updating task state:", error.message);
-    res.status(500).json({ code: "TE_1" }); // General transaction error code
-  } finally {
-    if (connection) connection.release();
+    if (error.code === 'ER_BAD_DB_ERROR' || error.code === 'ER_ACCESS_DENIED_ERROR' || error.code === 'ECONNREFUSED' || error.code === "ER_NO_DB_ERROR") {
+      res.status(500).json({ code: "E_TE1" });
+    } else {
+      res.status(500).json({ code: error.message });
+    }
   }
-}
-
+};
 
 
 // Route Declaration
 router.post("/CreateTask", CreateTask);
 router.post("/GetTaskbyState", GetTaskbyState);
-router.put("/PromoteTask2Done", PromoteTask2Done);
+router.patch("/PromoteTask2Done", PromoteTask2Done);
 
 module.exports = router;
