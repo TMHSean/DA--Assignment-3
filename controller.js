@@ -108,6 +108,7 @@ const sendTaskNotification = async (taskId, taskName, groupName) => {
 // Controller Function to create a new task
 const CreateTask = async (req, res) => {
   let connection;
+  let description = ""
   try {
 
     const { username, password, app_acronym, task_name, task_description } = req.body;
@@ -119,6 +120,10 @@ const CreateTask = async (req, res) => {
 
     if (task_name.trim().length <= 0) {
       throw new Error("E_TE2");
+    }
+
+    if (!task_description) {
+      description = ""
     }
 
     // Expected keys validation || checking for additional parameters in the payload
@@ -187,7 +192,7 @@ const CreateTask = async (req, res) => {
 
     await connection.query(
       "INSERT INTO task (task_id, task_name, task_description, task_plan, task_app_acronym, task_state, task_creator, task_owner, task_createDate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      [task_id, tasknameLower, task_description, null, acronymLower, 'open', usernameLower, usernameLower, formattedDate]
+      [task_id, tasknameLower, description, null, acronymLower, 'open', usernameLower, usernameLower, formattedDate]
     );
 
     const initialNote = `User ${usernameLower} has created the task.`;
@@ -209,16 +214,16 @@ const CreateTask = async (req, res) => {
     const errorCode = error.message in errorCodes ? error.message : 'E_TE4';
 
     // Handle specific MySQL error codes with custom logic
-    if (error.code === 'ER_BAD_DB_ERROR' || 
-        error.code === 'ER_ACCESS_DENIED_ERROR' || 
-        error.code === 'ECONNREFUSED' || 
-        error.code === 'ER_NO_DB_ERROR') {
-        res.status(500).json({ code: "E_TE1" });
+    if (error.code === 'ER_BAD_DB_ERROR' ||
+      error.code === 'ER_ACCESS_DENIED_ERROR' ||
+      error.code === 'ECONNREFUSED' ||
+      error.code === 'ER_NO_DB_ERROR') {
+      res.status(500).json({ code: "E_TE1" });
     } else if (error.code === "ER_DATA_TOO_LONG") {
-        res.status(400).json({ code: "E_TE2" });
+      res.status(400).json({ code: "E_TE2" });
     } else {
-        // Use the statusCode and errorCode derived from the errorCodes dictionary
-        res.status(statusCode).json({ code: errorCode });
+      // Use the statusCode and errorCode derived from the errorCodes dictionary
+      res.status(statusCode).json({ code: errorCode });
     }
   } finally {
     if (connection) connection.release();
@@ -280,18 +285,18 @@ const GetTaskbyState = async (req, res) => {
     const errorCode = error.message in errorCodes ? error.message : 'E_TE4';
 
     // Handle specific MySQL error codes with custom logic
-    if (error.code === 'ER_BAD_DB_ERROR' || 
-        error.code === 'ER_ACCESS_DENIED_ERROR' || 
-        error.code === 'ECONNREFUSED' || 
-        error.code === 'ER_NO_DB_ERROR') {
-        res.status(500).json({ code: "E_TE1" });
+    if (error.code === 'ER_BAD_DB_ERROR' ||
+      error.code === 'ER_ACCESS_DENIED_ERROR' ||
+      error.code === 'ECONNREFUSED' ||
+      error.code === 'ER_NO_DB_ERROR') {
+      res.status(500).json({ code: "E_TE1" });
     } else if (error.code === "ER_DATA_TOO_LONG") {
-        res.status(400).json({ code: "E_TE2" });
+      res.status(400).json({ code: "E_TE2" });
     } else {
-        // Use the statusCode and errorCode derived from the errorCodes dictionary
-        res.status(statusCode).json({ code: errorCode });
+      // Use the statusCode and errorCode derived from the errorCodes dictionary
+      res.status(statusCode).json({ code: errorCode });
     }
-} finally {
+  } finally {
     if (connection) connection.release();
   }
 };
@@ -311,7 +316,7 @@ const PromoteTask2Done = async (req, res) => {
     validateKeys(req.body, ["username", "password", "task_id", "note"]);
 
     const usernameLower = username.toString().toLowerCase();
-    
+
     const connection = await db.getConnection();
     // Begin Transaction
     await connection.beginTransaction();
@@ -410,18 +415,18 @@ const PromoteTask2Done = async (req, res) => {
     const errorCode = error.message in errorCodes ? error.message : 'E_TE4';
 
     // Handle specific MySQL error codes with custom logic
-    if (error.code === 'ER_BAD_DB_ERROR' || 
-        error.code === 'ER_ACCESS_DENIED_ERROR' || 
-        error.code === 'ECONNREFUSED' || 
-        error.code === 'ER_NO_DB_ERROR') {
-        res.status(500).json({ code: "E_TE1" });
+    if (error.code === 'ER_BAD_DB_ERROR' ||
+      error.code === 'ER_ACCESS_DENIED_ERROR' ||
+      error.code === 'ECONNREFUSED' ||
+      error.code === 'ER_NO_DB_ERROR') {
+      res.status(500).json({ code: "E_TE1" });
     } else if (error.code === "ER_DATA_TOO_LONG") {
-        res.status(400).json({ code: "E_TE2" });
+      res.status(400).json({ code: "E_TE2" });
     } else {
-        // Use the statusCode and errorCode derived from the errorCodes dictionary
-        res.status(statusCode).json({ code: errorCode });
+      // Use the statusCode and errorCode derived from the errorCodes dictionary
+      res.status(statusCode).json({ code: errorCode });
     }
-} finally {
+  } finally {
     if (connection) connection.release();
   }
 };
