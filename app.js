@@ -24,7 +24,7 @@ const allowedPaths = ["/CreateTask", "/GetTaskbyState", "/PromoteTask2Done"];
 // Middleware to check if req.path is allowed
 app.use((req, res, next) => {
   if (!allowedPaths.includes(req.path)) {
-    return res.status(404).json({ code: "E_VU2" });
+    return res.status(404).json({ code: "E_VU1" });
   }
   next(); // Continue to the next middleware or route handler
 });

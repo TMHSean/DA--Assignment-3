@@ -78,7 +78,7 @@ const sendTaskNotification = async (taskId, taskName, groupName) => {
         const mailOptions = {
           from: process.env.EMAIL_USER,
           to: email,
-          subject: 'Task Completed Notification',
+          subject: `[${taskId}] Task Completed Notification`,
           html: `Dear ${user}, 
           <br><br> 
           The task "<strong>${taskName}</strong>" has been marked as done. Please review the task.
@@ -308,7 +308,7 @@ const PromoteTask2Done = async (req, res) => {
     const newState = "done";
     const validStates = ["open", "todo", "doing", "done", "closed"];
 
-    if (!username || !password || !task_id) {
+    if (!username || !password || !task_id || !note) {
       throw new Error("E_SP1");
     }
 
@@ -352,14 +352,16 @@ const PromoteTask2Done = async (req, res) => {
     const appAcronym = appResult[0].task_app_acronym
 
     // retrieve permit group for permit done
-    const [permitGroupResult] = await connection.query('SELECT app_permit_done FROM application WHERE app_acronym = ?', [appAcronym]);
-    const permitGroup = permitGroupResult[0].app_permit_done
+    const [permitGroupResult] = await connection.query('SELECT app_permit_doing FROM application WHERE app_acronym = ?', [appAcronym]);
+    const permitGroup = permitGroupResult[0].app_permit_doing
 
     // retrieve user current group(s)
     const [userGroupResult] = await connection.query('SELECT group_name FROM usergroup WHERE username = ?', [user.username])
     const userGroup = userGroupResult[0].group_name
 
     console.log("GroupName: " + userGroup)
+    console.log(userGroup)
+    console.log(permitGroup)
 
     if (userGroup !== permitGroup) {
       throw new Error("E_AR1")
@@ -402,7 +404,7 @@ const PromoteTask2Done = async (req, res) => {
 
       await connection.commit(); // Commit the transaction if successful
 
-      await sendTaskNotification(task_id, task.task_name, permitGroup);
+      sendTaskNotification(task_id, task.task_name, permitGroup);
 
       res.status(200).json({ code: "S_001" });
     }
