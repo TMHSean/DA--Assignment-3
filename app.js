@@ -7,7 +7,8 @@ const db = require("./db");
 const taskController = require("./controller");
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT;
+console.log(PORT)
 
 const corsOptions = {
   origin: `http://localhost:${process.env.LOCALHOST_PORT}`, // Replace with your SvelteKit frontend URL
@@ -29,7 +30,14 @@ app.use((req, res, next) => {
   next(); // Continue to the next middleware or route handler
 });
 
+// Route handler
 app.use("/", taskController);
+
+// Global error handler
+app.use((err, req, res, next) => {
+  console.error(err.stack); // Log the error stack
+  res.status(500).json({ code: "E_TE1", message: "Internal Server Error" });
+});
 
 // Start the server
 app.listen(PORT, () => {

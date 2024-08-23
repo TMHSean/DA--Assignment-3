@@ -1,0 +1,19 @@
+# Use a base image with debugging tools or additional utilities
+FROM node:18-alpine
+
+WORKDIR /app
+
+COPY package*.json ./
+
+# Install all dependencies, including devDependencies
+RUN npm install
+
+COPY . .
+
+EXPOSE 3000
+
+# Command to start the app in development mode
+CMD ["npm", "run", "dev"]
+
+# command line to run
+# docker build --build-arg NODE_ENV=development -t your-app:dev -f Dockerfile .
