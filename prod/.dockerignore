@@ -1,0 +1,9 @@
+node_modules
+npm-debug.log
+Dockerfile
+.dockerignore
+*.sql
+.gitattributes
+dev.env
+node18-alpine.tar
+
